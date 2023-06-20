@@ -30,8 +30,6 @@ L := m + k (number of basis variables)
 def _pivoting(tableau: jnp.ndarray, pc: jnp.ndarray, pr: jnp.ndarray) -> jnp.ndarray:
     """Perform a pivoting step and returns the new tableau with the replacement op.
 
-    [TESTED VS. QUANTECON]
-
     Parameters
     ----------
     tableau : jnp.ndarray, shape=(L + 1, n + m + L + 1)
@@ -64,8 +62,6 @@ def _min_ratio_test_no_tie_breaking(
     num_candidates: jnp.ndarray,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Performs the min ratio test without tie breaks.
-
-    [TESTED VS. QUANTECON]
 
     Parameters
     ----------
@@ -250,6 +246,9 @@ def _lex_min_ratio_test(
 # # QUANTECON IMPL #
 # # ############## #
 
+# import numpy as np
+
+
 # def _pivoting_qe(tableau, pivot_col, pivot_row):
 #     """
 #     Perform a pivoting step. Modify `tableau` in place.
@@ -288,8 +287,10 @@ def _lex_min_ratio_test(
 
 #     return tableau
 
-# def _min_ratio_test_no_tie_breaking_qe(tableau, pivot, test_col,
-#                                     argmins, num_candidates):
+
+# def _min_ratio_test_no_tie_breaking_qe(
+#     tableau, pivot, test_col, argmins, num_candidates
+# ):
 #     """
 #     Perform the minimum ratio test, without tie breaking, for the
 #     candidate rows in `argmins[:num_candidates]`. Return the number
@@ -335,12 +336,14 @@ def _lex_min_ratio_test(
 #             num_argmins = 1
 #         else:  # Ratio equal
 #             num_argmins += 1
-#         argmins[num_argmins-1] = i
+#         argmins[num_argmins - 1] = i
 
 #     return num_argmins
 
-# def _lex_min_ratio_test_qe(tableau, pivot, slack_start,
-#                         tol_piv=TOL_PIV, tol_ratio_diff=TOL_RATIO_DIFF):
+
+# def _lex_min_ratio_test_qe(
+#     tableau, pivot, slack_start, tol_piv=TOL_PIV, tol_ratio_diff=TOL_RATIO_DIFF
+# ):
 #     """
 #     Perform the lexico-minimum ratio test.
 
@@ -378,87 +381,85 @@ def _lex_min_ratio_test(
 #     if num_argmins == 1:
 #         found = True
 #     elif num_argmins >= 2:
-#         for j in range(slack_start, slack_start+nrows):
+#         for j in range(slack_start, slack_start + nrows):
 #             if j == pivot:
 #                 continue
 #             num_argmins = _min_ratio_test_no_tie_breaking_qe(
-#                 tableau, pivot, j, argmins, num_argmins,
+#                 tableau,
+#                 pivot,
+#                 j,
+#                 argmins,
+#                 num_argmins,
 #             )
 #             if num_argmins == 1:
 #                 found = True
 #                 break
 #     return found, argmins[0]
 
+
 # if __name__ == "__main__":
 #     import numpy as np
-#     from jax import jacobian, jacrev, jacfwd
-#     tableau = np.random.rand(5, 4, 3)
-#     pr = np.array([0,1,2,3,0], dtype=int)
-#     pc = np.array([0,1,2,0,1], dtype=int)
 
-#     # testing pivoting
-#     tableau_jax = jit(vmap(_pivoting))(jnp.array(tableau), jnp.array(pc), jnp.array(pr))
-#     for i in range(5):
-#         _pivoting_qe(tableau[i, ...], pc[i], pr[i])
-
-#     grad_tableau_jax = jit(vmap(jacobian(_pivoting)))(
-#         jnp.array(tableau), jnp.array(pc), jnp.array(pr)
-#     )
-#     breakpoint()
-
-#     # testing the min ratio test without tiebreaks
-#     tableau = np.random.rand(5, 4, 3)
-#     pivot = np.array([0, 1, 2, 0, 1])
-#     test_col = np.array([2, 1, 0, 2, 1])
-#     num_candidates = np.array([1, 2, 3, 4, 3])
-#     na_jax, am_jax = jit(vmap(_min_ratio_test_no_tie_breaking))(
-#         jnp.array(tableau),
-#         jnp.array(pivot),
-#         jnp.array(test_col),
-#         jnp.repeat(jnp.arange(4)[None, ...], 5, axis=0),
-#         jnp.array(num_candidates),
-#     )
-#     na = []
-#     am = []
-#     for i in range(5):
-#         _am = np.arange(4)
-#         _na = _min_ratio_test_no_tie_breaking_qe(
-#             tableau[i, ...], pivot[i], test_col[i], _am, num_candidates[i]
-#         )
-#         am.append(_am)
-#         na.append(_na)
-#     am = np.stack(am)
-#     na = np.stack(na)
-
-#     grad_mrt_jax = jit(vmap(jacfwd(_min_ratio_test_no_tie_breaking)))(
-#         jnp.array(tableau),
-#         jnp.array(pivot),
-#         jnp.array(test_col),
-#         jnp.repeat(jnp.arange(4)[None, ...], 5, axis=0),
-#         jnp.array(num_candidates),
-#     )  # [TODO] returns all 0s using fwd mode
-#     breakpoint()
-
-#     # testing the lexicographic min ratio test
-#     tableau = np.random.rand(5, 4, 3)
-#     pivot = np.array([0, 1, 2, 0, 1])
-#     slack_start = np.array([0, 0, 0, 0, 0])
-#     found_jax, row_min_jax = jit(vmap(_lex_min_ratio_test))(
-#         jnp.array(tableau), jnp.array(pivot), jnp.array(slack_start)
-#     )
-
-#     found = []
-#     row_min = []
-#     for i in range(5):
-#         _found, _row_min = _lex_min_ratio_test_qe(
-#             tableau[i, ...], pivot[i], 0
-#         )
-#         found.append(_found)
-#         row_min.append(_row_min)
-#     found = np.stack(found)
-#     row_min = np.stack(row_min)
-
-#     # grad_lmrt_jax = jit(vmap(jacfwd(_lex_min_ratio_test)))(
+#     # tableau = np.random.randn(5, 4, 3)
+#     # pr = np.array([0,1,2,3,0], dtype=int)
+#     # pc = np.array([0,1,2,0,1], dtype=int)
+#     # # testing pivoting
+#     # tableau_jax = jit(vmap(_pivoting))(jnp.array(tableau), jnp.array(pc), jnp.array(pr))
+#     # for i in range(5):
+#     #     _pivoting_qe(tableau[i, ...], pc[i], pr[i])
+#     # grad_tableau_jax = jit(vmap(jacobian(_pivoting)))(
+#     #     jnp.array(tableau), jnp.array(pc), jnp.array(pr)
+#     # )
+#     # breakpoint()
+#     # # testing the min ratio test without tiebreaks
+#     # tableau = np.random.randn(5, 4, 3)
+#     # pivot = np.array([0, 1, 2, 0, 1])
+#     # test_col = np.array([2, 1, 0, 2, 1])
+#     # num_candidates = np.array([1, 2, 3, 4, 3])
+#     # na_jax, am_jax = jit(vmap(_min_ratio_test_no_tie_breaking))(
+#     #     jnp.array(tableau),
+#     #     jnp.array(pivot),
+#     #     jnp.array(test_col),
+#     #     jnp.repeat(jnp.arange(4)[None, ...], 5, axis=0),
+#     #     jnp.array(num_candidates),
+#     # )
+#     # na = []
+#     # am = []
+#     # for i in range(5):
+#     #     _am = np.arange(4)
+#     #     _na = _min_ratio_test_no_tie_breaking_qe(
+#     #         tableau[i, ...], pivot[i], test_col[i], _am, num_candidates[i]
+#     #     )
+#     #     am.append(_am)
+#     #     na.append(_na)
+#     # am = np.stack(am)
+#     # na = np.stack(na)
+#     # grad_mrt_jax = jit(vmap(jacfwd(_min_ratio_test_no_tie_breaking)))(
+#     #     jnp.array(tableau),
+#     #     jnp.array(pivot),
+#     #     jnp.array(test_col),
+#     #     jnp.repeat(jnp.arange(4)[None, ...], 5, axis=0),
+#     #     jnp.array(num_candidates),
+#     # )  # [TODO] returns all 0s using fwd mode
+#     # breakpoint()
+#     # # testing the lexicographic min ratio test
+#     # tableau = np.random.randn(5, 4, 3)
+#     # pivot = np.array([0, 1, 2, 0, 1])
+#     # slack_start = np.array([0, 1, 0, 1, 0])
+#     # found_jax, row_min_jax = jit(vmap(_lex_min_ratio_test))(
 #     #     jnp.array(tableau), jnp.array(pivot), jnp.array(slack_start)
-#     # )  # [TODO] breaks!
-#     breakpoint()
+#     # )
+#     # found = []
+#     # row_min = []
+#     # for i in range(5):
+#     #     _found, _row_min = _lex_min_ratio_test_qe(
+#     #         tableau[i, ...], pivot[i], 0
+#     #     )
+#     #     found.append(_found)
+#     #     row_min.append(_row_min)
+#     # found = np.stack(found)
+#     # row_min = np.stack(row_min)
+#     # # grad_lmrt_jax = jit(vmap(jacfwd(_lex_min_ratio_test)))(
+#     # #     jnp.array(tableau), jnp.array(pivot), jnp.array(slack_start)
+#     # # )  # [TODO] breaks!
+#     # breakpoint()
