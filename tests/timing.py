@@ -13,10 +13,10 @@ cc.initialize_cache("jax_cache")
 """Times the jit-compiled simplex method vs. Gurobi via the cvxpy interface."""
 
 # compiled+batched linprog
-B = 100
-n = 20
-m = 20
-k = 5
+B = 2
+n = 2
+m = 2
+k = 2
 
 # pre-compiling
 c = jnp.zeros((B, n))
@@ -25,11 +25,17 @@ b_ineq = jnp.zeros((B, m))
 A_eq = jnp.zeros((B, k, n))
 b_eq = jnp.zeros((B, k))
 batch_linprog = jit(vmap(linprog))
-x_opt, lambda_opt, val_opt, success = batch_linprog(c, A_ineq, b_ineq, A_eq, b_eq)
 
-print("PRE-COMPILED")
+start = time.time()
+x_opt, lambda_opt, val_opt, success = batch_linprog(c, A_ineq, b_ineq, A_eq, b_eq)
+end = time.time()
+print(f"Total pre-compile time (s): {end - start}")
 
 # timing
+B = 100
+n = 20
+m = 20
+k = 20
 start = time.time()
 c = jnp.array(np.random.randn((B, n)))
 A_ineq = jnp.array(np.random.randn((B, m, n)))
@@ -38,6 +44,6 @@ A_eq = jnp.array(np.random.randn((B, k, n)))
 b_eq = jnp.array(np.random.randn((B, k)))
 batch_linprog(c, A_ineq, b_ineq, A_eq, b_eq)[0].block_until_ready()
 end = time.time()
-print((end - start) / B)
+print(f"Batch-normalized solve time: {(end - start) / B}")
 
 breakpoint()
