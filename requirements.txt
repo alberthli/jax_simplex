@@ -1,4 +1,4 @@
-cvxpy>=1.3.1  # [DEV]
+cvxpy[GUROBI]>=1.3.1  # [DEV]
 hypothesis>=6.75.3  # [DEV]
 jax[cuda12_pip]>=0.4.10
 jax_dataclasses>=1.5.1
