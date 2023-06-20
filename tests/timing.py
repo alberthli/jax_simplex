@@ -4,8 +4,11 @@ import time
 import jax.numpy as jnp
 import numpy as np
 from jax import jit, vmap
+from jax.experimental.compilation_cache import compilation_cache as cc
 
 from jax_simplex.simplex import linprog
+
+cc.initialize_cache("jax_cache")
 
 """Times the jit-compiled simplex method vs. Gurobi via the cvxpy interface."""
 
