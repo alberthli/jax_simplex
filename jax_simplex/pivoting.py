@@ -107,12 +107,38 @@ def _mrt_body_fun(val, pivot, test_col, tableau, num_candidates):
     case2 = ratio < ratio_min - TOL_RATIO_DIFF
     case3 = True
     cases = jnp.array([case1, case2, case3])
+
+    # computing elements to pass to the branches
+    # [NOTE] also tried passing `i` into the branch helpers and computing the updated
+    # `argmins` in each branch, but that seems slower than pre-computing all 3 and
+    # simply branching on the selection.
+    ratios_tuple = (ratio_min, ratio)
+    argmins_tuple = (argmins, argmins.at[0].set(i), argmins.at[num_argmins].set(i))
     branches = [
-        lambda: (k + 1, ratio_min, num_argmins, argmins),
-        lambda: (k + 1, ratio, 1, argmins.at[0].set(i)),
-        lambda: (k + 1, ratio_min, num_argmins + 1, argmins.at[num_argmins].set(i)),
+        _mrt_branch1_helper,
+        _mrt_branch2_helper,
+        _mrt_branch3_helper,
     ]
-    return lax.switch(jnp.argmax(cases), branches)
+    return lax.switch(
+        jnp.argmax(cases),
+        branches,
+        k,
+        ratios_tuple,
+        num_argmins,
+        argmins_tuple,
+    )
+
+
+def _mrt_branch1_helper(k, ratios_tuple, num_argmins, argmins_tuple):
+    return k + 1, ratios_tuple[0], num_argmins, argmins_tuple[0]
+
+
+def _mrt_branch2_helper(k, ratios_tuple, num_argmins, argmins_tuple):
+    return k + 1, ratios_tuple[1], 1, argmins_tuple[1]
+
+
+def _mrt_branch3_helper(k, ratios_tuple, num_argmins, argmins_tuple):
+    return k + 1, ratios_tuple[0], num_argmins + 1, argmins_tuple[2]
 
 
 # ####################### #

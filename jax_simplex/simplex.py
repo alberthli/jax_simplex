@@ -23,7 +23,7 @@ L := m + k (number of basis variables)
 """
 
 FEAS_TOL = 1e-6
-MAX_ITER = int(1e3)
+MAX_ITER = int(1e6)
 
 # ################# #
 # LINPROG + HELPERS #
@@ -68,9 +68,6 @@ def linprog(
     success : jnp.ndarray[bool], shape=(,)
         Whether the solver succeeded in finding an optimal solution.
     """
-    n, m, k = c.shape[0], A_ineq.shape[0], A_eq.shape[0]
-    L = m + k
-
     # initialize tableau and execute phase 1
     tableau, basis = initialize_tableau(A_ineq, b_ineq, A_eq, b_eq)
     tableau, basis, success = solve_tableau(tableau, basis, jnp.array(False))
@@ -78,9 +75,21 @@ def linprog(
     # check whether phase 1 terminates, otherwise execute phase 2
     return lax.cond(
         jnp.logical_or(~success, tableau[-1, -1] > FEAS_TOL),
-        lambda: (jnp.zeros(n), jnp.zeros(L), jnp.array(jnp.inf), jnp.array(False)),
-        lambda: _phase2_func(tableau, basis, c, b_ineq, b_eq),
+        _linprog_true_fun,
+        _phase2_func,
+        tableau,
+        basis,
+        c,
+        b_ineq,
+        b_eq,
     )
+
+
+def _linprog_true_fun(tableau, basis, c, b_ineq, b_eq):
+    """Helper function for `linprog`. True function of the conditional."""
+    n, m, k = c.shape[0], b_ineq.shape[0], b_eq.shape[0]
+    L = m + k
+    return jnp.zeros(n), jnp.zeros(L), jnp.array(jnp.inf), jnp.array(False)
 
 
 def _phase2_func(tableau, basis, c, b_ineq, b_eq):
@@ -359,108 +368,134 @@ def _solve_tableau_body_fun(val):
 
     cases = jnp.array([~pivcol_found, ~pivrow_found, True])
     branches = [
-        lambda: (i + 1, _tableau, _basis, skip_aux, jnp.array(True), jnp.array(True)),
-        lambda: (i + 1, _tableau, _basis, skip_aux, jnp.array(False), jnp.array(True)),
-        lambda: (
-            i + 1,
-            pivoting(_tableau, pivcol, pivrow),
-            _basis.at[pivrow].set(pivcol),
-            skip_aux,
-            jnp.array(False),
-            jnp.array(False),
-        ),
+        _solve_tableau_branch1_fun,
+        _solve_tableau_branch2_fun,
+        _solve_tableau_branch3_fun,
     ]
-    new_val = lax.switch(jnp.argmax(cases), branches)
-    return new_val
+    return lax.switch(
+        jnp.argmax(cases),
+        branches,
+        i,
+        _tableau,
+        _basis,
+        skip_aux,
+        pivcol,
+        pivrow,
+    )
+
+
+def _solve_tableau_branch1_fun(i, _tableau, _basis, skip_aux, pivcol, pivrow):
+    """Helper function for `_solve_tableau`. Branch 1 function."""
+    return i + 1, _tableau, _basis, skip_aux, jnp.array(True), jnp.array(True)
+
+
+def _solve_tableau_branch2_fun(i, _tableau, _basis, skip_aux, pivcol, pivrow):
+    """Helper function for `_solve_tableau`. Branch 2 function."""
+    return i + 1, _tableau, _basis, skip_aux, jnp.array(False), jnp.array(True)
+
+
+def _solve_tableau_branch3_fun(i, _tableau, _basis, skip_aux, pivcol, pivrow):
+    """Helper function for `_solve_tableau`. Branch 3 function."""
+    return (
+        i + 1,
+        pivoting(_tableau, pivcol, pivrow),
+        _basis.at[pivrow].set(pivcol),
+        skip_aux,
+        jnp.array(False),
+        jnp.array(False),
+    )
 
 
 # if __name__ == "__main__":
-#     import numpy as np
-#     # np.random.seed(0)
+#     # import numpy as np
+#     # # np.random.seed(0)
 
-#     m = 5
-#     n = 4
-#     k = 3
-#     A_ineq = np.random.rand(m, n)
-#     b_ineq = np.random.rand(m)
-#     A_eq = np.random.rand(k, n)
-#     b_eq = np.random.rand(k)
-#     c = np.random.rand(n)
+#     # m = 5
+#     # n = 4
+#     # k = 3
+#     # A_ineq = np.random.rand(m, n)
+#     # b_ineq = np.random.rand(m)
+#     # A_eq = np.random.rand(k, n)
+#     # b_eq = np.random.rand(k)
+#     # c = np.random.rand(n)
 
-#     # transforming problem into canonical form
-#     n = 2 * n
-#     A_ineq = np.concatenate((A_ineq, -A_ineq), axis=-1)
-#     A_eq = np.concatenate((A_eq, -A_eq), axis=-1)
-#     c = np.concatenate((c, -c), axis=-1)
+#     # # transforming problem into canonical form
+#     # n = 2 * n
+#     # A_ineq = np.concatenate((A_ineq, -A_ineq), axis=-1)
+#     # A_eq = np.concatenate((A_eq, -A_eq), axis=-1)
+#     # c = np.concatenate((c, -c), axis=-1)
 
-#     # testing linprog solve
-#     from quantecon.optimize import linprog_simplex
-#     from jax import jit
-#     res = linprog_simplex(c, A_ineq, b_ineq, A_eq, b_eq)
-#     compiled_linprog = jit(linprog)
+#     # # testing linprog solve
+#     # from quantecon.optimize import linprog_simplex
+#     # from jax import jit
+#     # res = linprog_simplex(c, A_ineq, b_ineq, A_eq, b_eq)
+#     # compiled_linprog = jit(linprog)
 
-#     x_opt, lambda_opt, val_opt, success = compiled_linprog(
-#         jnp.array(c),
-#         jnp.array(A_ineq),
-#         jnp.array(b_ineq),
-#         jnp.array(A_eq),
-#         jnp.array(b_eq),
-#     )
+#     # x_opt, lambda_opt, val_opt, success = compiled_linprog(
+#     #     jnp.array(c),
+#     #     jnp.array(A_ineq),
+#     #     jnp.array(b_ineq),
+#     #     jnp.array(A_eq),
+#     #     jnp.array(b_eq),
+#     # )
 
-#     print("COMPARING TO QUANTECON")
-#     print(f"QE status: {res.status}")
-#     if res.status == 0 and success:
-#         print(res.x - x_opt)
-#         print(res.lambd - lambda_opt)
-#         print(res.fun - val_opt)
-#     print()
+#     # print("COMPARING TO QUANTECON")
+#     # print(f"QE status: {res.status}")
+#     # if res.status == 0 and success:
+#     #     print(res.x - x_opt)
+#     #     print(res.lambd - lambda_opt)
+#     #     print(res.fun - val_opt)
+#     # print()
 
-#     from scipy.optimize import linprog as linprog_scipy
-#     res_scipy = linprog_scipy(
-#         -c, A_ub=A_ineq, b_ub=b_ineq, A_eq=A_eq, b_eq=b_eq, method="highs-ds"
-#     )
+#     # from scipy.optimize import linprog as linprog_scipy
+#     # res_scipy = linprog_scipy(
+#     #     -c, A_ub=A_ineq, b_ub=b_ineq, A_eq=A_eq, b_eq=b_eq, method="highs-ds"
+#     # )
 
-#     print("COMPARING TO SCIPY")
-#     print(f"scipy status: {res_scipy.status}")
-#     if res_scipy.success and success:
-#         print(res_scipy.x - x_opt)
-#         lambda_opt_scipy = -np.concatenate(
-#             (res_scipy.ineqlin.marginals, res_scipy.eqlin.marginals)
-#         )
-#         print(lambda_opt_scipy - lambda_opt)
-#         print(-res_scipy.fun - val_opt)
-#     print()
+#     # print("COMPARING TO SCIPY")
+#     # print(f"scipy status: {res_scipy.status}")
+#     # if res_scipy.success and success:
+#     #     print(res_scipy.x - x_opt)
+#     #     lambda_opt_scipy = -np.concatenate(
+#     #         (res_scipy.ineqlin.marginals, res_scipy.eqlin.marginals)
+#     #     )
+#     #     print(lambda_opt_scipy - lambda_opt)
+#     #     print(-res_scipy.fun - val_opt)
+#     # print()
 
-#     import cvxpy as cp
-#     x = cp.Variable(n)
-#     obj = cp.Maximize(c @ x)
-#     constraints = [x >= 0]
-#     if m > 0:
-#         constraints += [A_ineq @ x <= b_ineq]
-#     if k > 0:
-#         constraints += [A_eq @ x == b_eq]
-#     prob = cp.Problem(obj, constraints)
-#     prob.solve(solver=cp.GUROBI)
+#     # import cvxpy as cp
+#     # x = cp.Variable(n)
+#     # obj = cp.Maximize(c @ x)
+#     # constraints = [x >= 0]
+#     # if m > 0:
+#     #     constraints += [A_ineq @ x <= b_ineq]
+#     # if k > 0:
+#     #     constraints += [A_eq @ x == b_eq]
+#     # prob = cp.Problem(obj, constraints)
+#     # prob.solve(solver=cp.GUROBI)
 
-#     print("COMPARING TO CVXPY")
-#     if prob.status == "optimal" and success:
-#         _lambda_opt = np.concatenate(
-#             (constraints[1].dual_value, constraints[2].dual_value)
-#         )
-#         print(x.value - x_opt)
-#         print(_lambda_opt - lambda_opt)
-#         print(prob.value - val_opt)
-#     print()
+#     # print("COMPARING TO CVXPY")
+#     # if prob.status == "optimal" and success:
+#     #     _lambda_opt = np.concatenate(
+#     #         (constraints[1].dual_value, constraints[2].dual_value)
+#     #     )
+#     #     print(x.value - x_opt)
+#     #     print(_lambda_opt - lambda_opt)
+#     #     print(prob.value - val_opt)
+#     # print()
 
-#     breakpoint()
+#     # breakpoint()
 
 #     # TIMING #
+#     import numpy as np
+#     from quantecon.optimize import linprog_simplex
+#     from scipy.optimize import linprog as linprog_scipy
 #     import time
-#     from jax import vmap
+#     from jax import jit, vmap
 #     B = 16
 #     m = 14
 #     n = 32
-#     k = 14
+#     k = 0
 #     A_ineq = np.random.rand(B, m, n)
 #     b_ineq = np.random.rand(B, m)
 #     A_eq = np.random.rand(B, k, n)
@@ -474,44 +509,71 @@ def _solve_tableau_body_fun(val):
 #     c = np.concatenate((c, -c), axis=-1)
 
 #     # pre-compiling
+#     c_jax = jnp.array(c)
+#     A_ineq_jax = jnp.array(A_ineq)
+#     b_ineq_jax = jnp.array(b_ineq)
+#     A_eq_jax = jnp.array(A_eq)
+#     b_eq_jax = jnp.array(b_eq)
 #     batch_linprog = jit(vmap(linprog))
-#     batch_linprog(
-#         jnp.array(c),
-#         jnp.array(A_ineq),
-#         jnp.array(b_ineq),
-#         jnp.array(A_eq),
-#         jnp.array(b_eq),
+#     x_opt, lambda_opt, val_opt, success = batch_linprog(
+#         c_jax,
+#         A_ineq_jax,
+#         b_ineq_jax,
+#         A_eq_jax,
+#         b_eq_jax,
 #     )
+#     x_opt.block_until_ready()
+#     lambda_opt.block_until_ready()
+#     val_opt.block_until_ready()
+#     success.block_until_ready()
 
-#     # # generating data one more time
-#     # B = 16
-#     # m = 14
-#     # n = 32
-#     # k = 14
-#     # A_ineq = np.random.rand(B, m, n)
-#     # b_ineq = np.random.rand(B, m)
-#     # A_eq = np.random.rand(B, k, n)
-#     # b_eq = np.random.rand(B, k)
-#     # c = np.random.rand(B, n)
+#     # generating data one more time
+#     B = 16
+#     m = 14
+#     n = 32
+#     k = 0
+#     A_ineq = np.random.rand(B, m, n)
+#     b_ineq = np.random.rand(B, m)
+#     A_eq = np.random.rand(B, k, n)
+#     b_eq = np.random.rand(B, k)
+#     c = np.random.rand(B, n)
 
-#     # # transforming problem into canonical form
-#     # n = 2 * n
-#     # A_ineq = np.concatenate((A_ineq, -A_ineq), axis=-1)
-#     # A_eq = np.concatenate((A_eq, -A_eq), axis=-1)
-#     # c = np.concatenate((c, -c), axis=-1)
+#     # transforming problem into canonical form
+#     n = 2 * n
+#     A_ineq = np.concatenate((A_ineq, -A_ineq), axis=-1)
+#     A_eq = np.concatenate((A_eq, -A_eq), axis=-1)
+#     c = np.concatenate((c, -c), axis=-1)
 
 #     # serial
+#     # start = time.time()
+#     # for i in range(B):
+#     #     x_opt, lambda_opt, val_opt, success = compiled_linprog(
+#     #         jnp.array(c[i]),
+#     #         jnp.array(A_ineq[i]),
+#     #         jnp.array(b_ineq[i]),
+#     #         jnp.array(A_eq[i]),
+#     #         jnp.array(b_eq[i]),
+#     #     )
+#     # end = time.time()
+#     # print(f"Serial My Impl: {(end - start) / B}")
+
+#     # batched
+#     num_reps = 100
 #     start = time.time()
-#     for i in range(B):
-#         x_opt, lambda_opt, val_opt, success = compiled_linprog(
-#             jnp.array(c[i]),
-#             jnp.array(A_ineq[i]),
-#             jnp.array(b_ineq[i]),
-#             jnp.array(A_eq[i]),
-#             jnp.array(b_eq[i]),
+#     for j in range(num_reps):
+#         x_opt, lambda_opt, val_opt, success = batch_linprog(
+#             c_jax,
+#             A_ineq_jax,
+#             b_ineq_jax,
+#             A_eq_jax,
+#             b_eq_jax,
 #         )
+#         x_opt.block_until_ready()
+#         lambda_opt.block_until_ready()
+#         val_opt.block_until_ready()
+#         success.block_until_ready()
 #     end = time.time()
-#     print(f"Serial My Impl: {(end - start) / B}")
+#     print(f"Batched My Impl: {(end - start) / (B * num_reps)}")
 
 #     start = time.time()
 #     qe_successes = 0
@@ -534,17 +596,5 @@ def _solve_tableau_body_fun(val):
 #         )
 #     end = time.time()
 #     print(f"Serial scipy: {(end - start) / B}")
-
-#     # batched
-#     start = time.time()
-#     x_opt, lambda_opt, val_opt, success = batch_linprog(
-#         jnp.array(c),
-#         jnp.array(A_ineq),
-#         jnp.array(b_ineq),
-#         jnp.array(A_eq),
-#         jnp.array(b_eq),
-#     )
-#     end = time.time()
-#     print(f"Batched My Impl: {(end - start) / B}")
 
 #     breakpoint()
