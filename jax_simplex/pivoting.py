@@ -7,25 +7,6 @@ config.update("jax_enable_x64", True)
 TOL_PIV = 1e-10
 TOL_RATIO_DIFF = 1e-15
 
-"""
-Implementation ported into Jax from the QuantEcon package:
-https://github.com/QuantEcon/QuantEcon.py
-
-Reference: KC Border 2004, "The Gauss–Jordan and Simplex Algorithms".
-
-Notation
---------
-Standard form LP:
-    maximize    c @ x
-    subject to  A_ineq @ x <= b_ineq
-                A_eq @ x == b_eq
-                x >= 0
-
-A_ineq, shape=(..., m, n)
-A_eq, shape=(..., k, n)
-L := m + k (number of basis variables)
-"""
-
 
 def _pivoting(tableau: jnp.ndarray, pc: jnp.ndarray, pr: jnp.ndarray) -> jnp.ndarray:
     """Perform a pivoting step and returns the new tableau with the replacement op.
@@ -192,38 +173,37 @@ def _lex_min_ratio_test(
         tableau, pivot, jnp.array(-1), argmins, num_candidates
     )
 
+    def argmin_update_func(carry, argmins):
+        # unpacking loop state
+        j, num_argmins, argmins, _ = carry
+
+        def branches_inner3(argmins):
+            num_argmins_inner, argmins_inner = _min_ratio_test_no_tie_breaking(
+                tableau, pivot, j, argmins, num_argmins
+            )
+            carry_inner = (j + 1, num_argmins_inner, argmins_inner, False)
+            return carry_inner, argmins_inner
+
+        conds_inner = jnp.array(
+            [
+                j == pivot,  # skip the pivot
+                num_argmins == 1,  # terminate the loop by only using dummy ops
+                True,  # else, run min ratio test w/o tiebreaks
+            ]
+        )
+        branches_inner = [
+            lambda argmins: ((j + 1, num_argmins, argmins, False), argmins),
+            lambda argmins: ((j + 1, num_argmins, argmins, True), argmins),
+            lambda argmins: branches_inner3(argmins),
+        ]
+        return lax.switch(jnp.argmax(conds_inner), branches_inner, argmins)
+
     # inner branching logic
     def inner_func(argmins):
         """Runs when num_argmins >= 2.
 
         Runs the lexicographic min ratio test until there's a unique choice.
         """
-
-        def argmin_update_func(carry, argmins):
-            # unpacking loop state
-            j, num_argmins, argmins, _ = carry
-
-            def branches_inner3(argmins):
-                num_argmins_inner, argmins_inner = _min_ratio_test_no_tie_breaking(
-                    tableau, pivot, j, argmins, num_argmins
-                )
-                carry_inner = (j + 1, num_argmins_inner, argmins_inner, False)
-                return carry_inner, argmins_inner
-
-            conds_inner = jnp.array(
-                [
-                    j == pivot,  # skip the pivot
-                    num_argmins == 1,  # terminate the loop by only using dummy ops
-                    True,  # else, run min ratio test w/o tiebreaks
-                ]
-            )
-            branches_inner = [
-                lambda argmins: ((j + 1, num_argmins, argmins, False), argmins),
-                lambda argmins: ((j + 1, num_argmins, argmins, True), argmins),
-                lambda argmins: branches_inner3(argmins),
-            ]
-            return lax.switch(jnp.argmax(conds_inner), branches_inner, argmins)
-
         # execute the lexicographic min ratio test loop
         xs = jnp.arange(nrows)
         carry_init = (slack_start, num_argmins, argmins, False)
@@ -240,226 +220,3 @@ def _lex_min_ratio_test(
         lambda argmins: (False, argmins[0]),
     ]
     return lax.switch(jnp.argmax(conds_outer), branches_outer, argmins)
-
-
-# # ############## #
-# # QUANTECON IMPL #
-# # ############## #
-
-# import numpy as np
-
-
-# def _pivoting_qe(tableau, pivot_col, pivot_row):
-#     """
-#     Perform a pivoting step. Modify `tableau` in place.
-
-#     Parameters
-#     ----------
-#     tableau : ndarray(float, ndim=2)
-#         Array containing the tableau.
-
-#     pivot_col : scalar(int)
-#         Pivot column index.
-
-#     pivot_row : scalar(int)
-#         Pivot row index.
-
-#     Returns
-#     -------
-#     tableau : ndarray(float, ndim=2)
-#         View to `tableau`.
-
-#     """
-#     nrows, ncols = tableau.shape
-
-#     pivot_elt = tableau[pivot_row, pivot_col]
-#     for j in range(ncols):
-#         tableau[pivot_row, j] /= pivot_elt
-
-#     for i in range(nrows):
-#         if i == pivot_row:
-#             continue
-#         multiplier = tableau[i, pivot_col]
-#         if multiplier == 0:
-#             continue
-#         for j in range(ncols):
-#             tableau[i, j] -= tableau[pivot_row, j] * multiplier
-
-#     return tableau
-
-
-# def _min_ratio_test_no_tie_breaking_qe(
-#     tableau, pivot, test_col, argmins, num_candidates
-# ):
-#     """
-#     Perform the minimum ratio test, without tie breaking, for the
-#     candidate rows in `argmins[:num_candidates]`. Return the number
-#     `num_argmins` of the rows minimizing the ratio and store thier
-#     indices in `argmins[:num_argmins]`.
-
-#     Parameters
-#     ----------
-#     tableau : ndarray(float, ndim=2)
-#         Array containing the tableau.
-
-#     pivot : scalar(int)
-#         Pivot.
-
-#     test_col : scalar(int)
-#         Index of the column used in the test.
-
-#     argmins : ndarray(int, ndim=1)
-#         Array containing the indices of the candidate rows. Modified in
-#         place to store the indices of minimizing rows.
-
-#     num_candidates : scalar(int)
-#         Number of candidate rows in `argmins`.
-
-#     Returns
-#     -------
-#     num_argmins : scalar(int)
-#         Number of minimizing rows.
-
-#     """
-#     ratio_min = np.inf
-#     num_argmins = 0
-
-#     for k in range(num_candidates):
-#         i = argmins[k]
-#         if tableau[i, pivot] <= TOL_PIV:  # Treated as nonpositive
-#             continue
-#         ratio = tableau[i, test_col] / tableau[i, pivot]
-#         if ratio > ratio_min + TOL_RATIO_DIFF:  # Ratio large for i
-#             continue
-#         elif ratio < ratio_min - TOL_RATIO_DIFF:  # Ratio smaller for i
-#             ratio_min = ratio
-#             num_argmins = 1
-#         else:  # Ratio equal
-#             num_argmins += 1
-#         argmins[num_argmins - 1] = i
-
-#     return num_argmins
-
-
-# def _lex_min_ratio_test_qe(
-#     tableau, pivot, slack_start, tol_piv=TOL_PIV, tol_ratio_diff=TOL_RATIO_DIFF
-# ):
-#     """
-#     Perform the lexico-minimum ratio test.
-
-#     Parameters
-#     ----------
-#     tableau : ndarray(float, ndim=2)
-#         Array containing the tableau.
-
-#     pivot : scalar(int)
-#         Pivot.
-
-#     slack_start : scalar(int)
-#         First index for the slack variables.
-
-#     Returns
-#     -------
-#     found : bool
-#         False if there is no positive entry in the pivot column.
-
-#     row_min : scalar(int)
-#         Index of the row with the lexico-minimum ratio.
-
-#     """
-#     nrows = tableau.shape[0]
-#     num_candidates = nrows
-
-#     found = False
-
-#     # Initialize `argmins`
-#     argmins = np.arange(nrows)
-
-#     num_argmins = _min_ratio_test_no_tie_breaking_qe(
-#         tableau, pivot, -1, argmins, num_candidates
-#     )
-#     if num_argmins == 1:
-#         found = True
-#     elif num_argmins >= 2:
-#         for j in range(slack_start, slack_start + nrows):
-#             if j == pivot:
-#                 continue
-#             num_argmins = _min_ratio_test_no_tie_breaking_qe(
-#                 tableau,
-#                 pivot,
-#                 j,
-#                 argmins,
-#                 num_argmins,
-#             )
-#             if num_argmins == 1:
-#                 found = True
-#                 break
-#     return found, argmins[0]
-
-
-# if __name__ == "__main__":
-#     import numpy as np
-
-#     # tableau = np.random.randn(5, 4, 3)
-#     # pr = np.array([0,1,2,3,0], dtype=int)
-#     # pc = np.array([0,1,2,0,1], dtype=int)
-#     # # testing pivoting
-#     # tableau_jax = jit(vmap(_pivoting))(jnp.array(tableau), jnp.array(pc), jnp.array(pr))
-#     # for i in range(5):
-#     #     _pivoting_qe(tableau[i, ...], pc[i], pr[i])
-#     # grad_tableau_jax = jit(vmap(jacobian(_pivoting)))(
-#     #     jnp.array(tableau), jnp.array(pc), jnp.array(pr)
-#     # )
-#     # breakpoint()
-#     # # testing the min ratio test without tiebreaks
-#     # tableau = np.random.randn(5, 4, 3)
-#     # pivot = np.array([0, 1, 2, 0, 1])
-#     # test_col = np.array([2, 1, 0, 2, 1])
-#     # num_candidates = np.array([1, 2, 3, 4, 3])
-#     # na_jax, am_jax = jit(vmap(_min_ratio_test_no_tie_breaking))(
-#     #     jnp.array(tableau),
-#     #     jnp.array(pivot),
-#     #     jnp.array(test_col),
-#     #     jnp.repeat(jnp.arange(4)[None, ...], 5, axis=0),
-#     #     jnp.array(num_candidates),
-#     # )
-#     # na = []
-#     # am = []
-#     # for i in range(5):
-#     #     _am = np.arange(4)
-#     #     _na = _min_ratio_test_no_tie_breaking_qe(
-#     #         tableau[i, ...], pivot[i], test_col[i], _am, num_candidates[i]
-#     #     )
-#     #     am.append(_am)
-#     #     na.append(_na)
-#     # am = np.stack(am)
-#     # na = np.stack(na)
-#     # grad_mrt_jax = jit(vmap(jacfwd(_min_ratio_test_no_tie_breaking)))(
-#     #     jnp.array(tableau),
-#     #     jnp.array(pivot),
-#     #     jnp.array(test_col),
-#     #     jnp.repeat(jnp.arange(4)[None, ...], 5, axis=0),
-#     #     jnp.array(num_candidates),
-#     # )  # [TODO] returns all 0s using fwd mode
-#     # breakpoint()
-#     # # testing the lexicographic min ratio test
-#     # tableau = np.random.randn(5, 4, 3)
-#     # pivot = np.array([0, 1, 2, 0, 1])
-#     # slack_start = np.array([0, 1, 0, 1, 0])
-#     # found_jax, row_min_jax = jit(vmap(_lex_min_ratio_test))(
-#     #     jnp.array(tableau), jnp.array(pivot), jnp.array(slack_start)
-#     # )
-#     # found = []
-#     # row_min = []
-#     # for i in range(5):
-#     #     _found, _row_min = _lex_min_ratio_test_qe(
-#     #         tableau[i, ...], pivot[i], 0
-#     #     )
-#     #     found.append(_found)
-#     #     row_min.append(_row_min)
-#     # found = np.stack(found)
-#     # row_min = np.stack(row_min)
-#     # # grad_lmrt_jax = jit(vmap(jacfwd(_lex_min_ratio_test)))(
-#     # #     jnp.array(tableau), jnp.array(pivot), jnp.array(slack_start)
-#     # # )  # [TODO] breaks!
-#     # breakpoint()

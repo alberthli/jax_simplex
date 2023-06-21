@@ -3,8 +3,31 @@ from jax import lax
 
 from jax_simplex.pivoting import _lex_min_ratio_test, _pivoting
 
+"""
+TODOs
+-----
+- move all lambdas in lax.cond calls outside?
+
+Implementation ported into Jax from the QuantEcon package:
+https://github.com/QuantEcon/QuantEcon.py
+
+Reference: KC Border 2004, "The Gauss–Jordan and Simplex Algorithms".
+
+Notation
+--------
+Standard form LP:
+    maximize    c @ x
+    subject to  A_ineq @ x <= b_ineq
+                A_eq @ x == b_eq
+                x >= 0
+
+A_ineq, shape=(..., m, n)
+A_eq, shape=(..., k, n)
+L := m + k (number of basis variables)
+"""
+
 FEAS_TOL = 1e-6
-MAX_ITER = int(1e6)
+MAX_ITER = int(1e3)
 
 
 def linprog(
@@ -40,7 +63,7 @@ def linprog(
         Optimal primal solution.
     lambda_opt : jnp.ndarray, shape=(L,)
         Optimal dual solution (inequality before equality multipliers).
-    fun : jnp.ndarray, shape=(,)
+    val_opt : jnp.ndarray, shape=(,)
         Optimal value.
     success : jnp.ndarray[bool], shape=(,)
         Whether the solver succeeded in finding an optimal solution.
@@ -52,13 +75,12 @@ def linprog(
     tableau, basis = _initialize_tableau(A_ineq, b_ineq, A_eq, b_eq)
     tableau, basis, success = solve_tableau(tableau, basis, jnp.array(False))
 
-    cases = jnp.array([~success, tableau[-1, -1] > FEAS_TOL, True])
-    branches = [
-        lambda: (jnp.zeros(n), jnp.zeros(L), jnp.array(jnp.inf), jnp.array(False)),
+    # check whether phase 1 terminates, otherwise execute phase 2
+    return lax.cond(
+        jnp.logical_or(~success, tableau[-1, -1] > FEAS_TOL),
         lambda: (jnp.zeros(n), jnp.zeros(L), jnp.array(jnp.inf), jnp.array(False)),
         lambda: _phase2_func(tableau, basis, c, b_ineq, b_eq),
-    ]
-    return lax.switch(jnp.argmax(cases), branches)
+    )
 
 
 def _phase2_func(tableau, basis, c, b_ineq, b_eq):
@@ -170,28 +192,6 @@ def _pivot_col(
     )
 
 
-def _mrt_helper(tableau, basis, skip_aux):
-    """Helper function for performing the min ratio test."""
-    L = tableau.shape[0] - 1
-    aux_start = tableau.shape[1] - L - 1
-
-    pivcol_found, pivcol = _pivot_col(tableau, skip_aux)
-    pivrow_found, pivrow = _lex_min_ratio_test(tableau[:-1, :], pivcol, aux_start)
-
-    cases = jnp.array([~pivrow_found, ~pivcol_found, True])
-    branches = [
-        lambda: (tableau, basis, jnp.array(False), jnp.array(True)),
-        lambda: (tableau, basis, jnp.array(True), jnp.array(True)),
-        lambda: (
-            _pivoting(tableau, pivcol, pivrow),
-            basis.at[pivrow].set(pivcol),
-            jnp.array(False),
-            jnp.array(False),
-        ),
-    ]
-    return lax.switch(jnp.argmax(cases), branches)
-
-
 def solve_tableau(
     tableau: jnp.ndarray, basis: jnp.ndarray, skip_aux: jnp.ndarray
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -215,18 +215,39 @@ def solve_tableau(
     success : jnp.ndarray[bool], shape=(,)
         Whether the algorithm succeeded in finding an optimal solution.
     """
-    init_val = tableau, basis, jnp.array(False), jnp.array(False)
+    # value = (index, tableau, basis, success, terminate)
+    init_val = 0, tableau, basis, jnp.array(False), jnp.array(False)
 
-    def loop_func(i, val):
-        """For loop function."""
-        _tableau, _basis, _success, _skip = val
-        return lax.cond(
-            _skip,
-            lambda: val,
-            lambda: _mrt_helper(_tableau, _basis, skip_aux),
-        )
+    def cond_fun(val):
+        i, _, _, _, terminate = val
+        return jnp.logical_and(i < MAX_ITER, ~terminate)
 
-    tableau, basis, success, _ = lax.fori_loop(0, MAX_ITER, loop_func, init_val)
+    def body_fun(val):
+        """Helper function for performing the min ratio test."""
+        i, _tableau, _basis, _, _ = val
+
+        L = _tableau.shape[0] - 1
+        aux_start = _tableau.shape[1] - L - 1
+
+        pivcol_found, pivcol = _pivot_col(_tableau, skip_aux)
+        pivrow_found, pivrow = _lex_min_ratio_test(_tableau[:-1, :], pivcol, aux_start)
+
+        cases = jnp.array([~pivcol_found, ~pivrow_found, True])
+        branches = [
+            lambda: (i + 1, _tableau, _basis, jnp.array(True), jnp.array(True)),
+            lambda: (i + 1, _tableau, _basis, jnp.array(False), jnp.array(True)),
+            lambda: (
+                i + 1,
+                _pivoting(_tableau, pivcol, pivrow),
+                _basis.at[pivrow].set(pivcol),
+                jnp.array(False),
+                jnp.array(False),
+            ),
+        ]
+        new_val = lax.switch(jnp.argmax(cases), branches)
+        return new_val
+
+    _, tableau, basis, success, _ = lax.while_loop(cond_fun, body_fun, init_val)
     return tableau, basis, success
 
 
@@ -318,165 +339,13 @@ def get_solution(
     return x_opt, lambda_opt, val_opt
 
 
-# # ############## #
-# # QUANTECON IMPL #
-# # ############## #
-
-# import numpy as np
-# from jax_simplex.pivoting import _lex_min_ratio_test_qe, _pivoting_qe
-
-# def _initialize_tableau_qe(A_ub, b_ub, A_eq, b_eq):
-#     m, k, n = A_ineq.shape[0], A_eq.shape[0], A_ineq.shape[1]
-#     L = m + k
-#     tableau = np.zeros(((L + 1, n + m + L + 1)))
-
-#     for i in range(m):
-#         for j in range(n):
-#             tableau[i, j] = A_ub[i, j]
-#     for i in range(k):
-#         for j in range(n):
-#             tableau[m+i, j] = A_eq[i, j]
-
-#     tableau[:L, n:-1] = 0
-
-#     for i in range(m):
-#         tableau[i, -1] = b_ub[i]
-#         if tableau[i, -1] < 0:
-#             for j in range(n):
-#                 tableau[i, j] *= -1
-#             tableau[i, n+i] = -1
-#             tableau[i, -1] *= -1
-#         else:
-#             tableau[i, n+i] = 1
-#         tableau[i, n+m+i] = 1
-#     for i in range(k):
-#         tableau[m+i, -1] = b_eq[i]
-#         if tableau[m+i, -1] < 0:
-#             for j in range(n):
-#                 tableau[m+i, j] *= -1
-#             tableau[m+i, -1] *= -1
-#         tableau[m+i, n+m+m+i] = 1
-
-#     tableau[-1, :] = 0
-#     for i in range(L):
-#         for j in range(n+m):
-#             tableau[-1, j] += tableau[i, j]
-#         tableau[-1, -1] += tableau[i, -1]
-
-#     basis = np.arange(m + n, m + n + L)
-
-#     return tableau, basis
-
-# def _pivot_col_qe(tableau, skip_aux):
-#     L = tableau.shape[0] - 1
-#     criterion_row_stop = tableau.shape[1] - 1
-#     if skip_aux:
-#         criterion_row_stop -= L
-
-#     found = False
-#     pivcol = -1
-#     coeff = FEAS_TOL
-#     for j in range(criterion_row_stop):
-#         if tableau[-1, j] > coeff:
-#             coeff = tableau[-1, j]
-#             pivcol = j
-#             found = True
-
-#     return found, pivcol
-
-# def solve_tableau_qe(tableau, basis, skip_aux=True):
-#     L = tableau.shape[0] - 1
-
-#     success = False
-#     status = 1
-#     num_iter = 0
-
-#     while num_iter < MAX_ITER:
-#         num_iter += 1
-
-#         pivcol_found, pivcol = _pivot_col_qe(tableau, skip_aux)
-
-#         if not pivcol_found:  # Optimal
-#             success = True
-#             status = 0
-#             break
-
-#         aux_start = tableau.shape[1] - L - 1
-#         pivrow_found, pivrow = _lex_min_ratio_test_qe(
-#             tableau[:-1, :], pivcol, aux_start
-#         )
-
-#         if not pivrow_found:  # Unbounded
-#             success = False
-#             status = 3
-#             break
-
-#         tableau = _pivoting_qe(tableau, pivcol, pivrow)
-#         basis[pivrow] = pivcol
-
-#     return tableau, basis, success
-
-# def _set_criterion_row_qe(c, basis, tableau):
-#     """
-#     Modify the criterion row of the tableau for Phase 2.
-
-#     Parameters
-#     ----------
-#     c : ndarray(float, ndim=1)
-#         ndarray of shape (n,).
-
-#     basis : ndarray(int, ndim=1)
-#         ndarray of shape (L,) containing the basis obtained by Phase 1.
-
-#     tableau : ndarray(float, ndim=2)
-#         ndarray of shape (L+1, n+m+L+1) containing the tableau obtained
-#         by Phase 1. Modified in place.
-
-#     Returns
-#     -------
-#     tableau : ndarray(float, ndim=2)
-#         View to `tableau`.
-
-#     """
-#     n = c.shape[0]
-#     L = basis.shape[0]
-
-#     for j in range(n):
-#         tableau[-1, j] = c[j]
-#     tableau[-1, n:] = 0
-
-#     for i in range(L):
-#         multiplier = tableau[-1, basis[i]]
-#         for j in range(tableau.shape[1]):
-#             tableau[-1, j] -= tableau[i, j] * multiplier
-
-#     return tableau
-
-# def get_solution_qe(tableau, basis, b_signs, c):
-#     n = c.shape[0]
-#     L = basis.shape[0]
-#     aux_start = tableau.shape[1] - L - 1
-
-#     x = np.zeros(n)
-#     for i in range(L):
-#         if basis[i] < n:
-#             x[basis[i]] = tableau[i, -1]
-#     lambd = np.zeros(L)
-#     for j in range(L):
-#         lambd[j] = tableau[-1, aux_start+j]
-#         if lambd[j] != 0 and b_signs[j]:
-#             lambd[j] *= -1
-#     fun = tableau[-1, -1] * (-1)
-
-#     return x, lambd, fun
-
 # if __name__ == "__main__":
 #     import numpy as np
 #     # np.random.seed(0)
 
 #     m = 5
-#     n = 5
-#     k = 2
+#     n = 4
+#     k = 3
 #     A_ineq = np.random.rand(m, n)
 #     b_ineq = np.random.rand(m)
 #     A_eq = np.random.rand(k, n)
@@ -487,43 +356,24 @@ def get_solution(
 #     n = 2 * n
 #     A_ineq = np.concatenate((A_ineq, -A_ineq), axis=-1)
 #     A_eq = np.concatenate((A_eq, -A_eq), axis=-1)
-#     c = np.concatenate((c, -c))
-
-#     # # testing tableau initialization
-#     # tableau, basis = _initialize_tableau_qe(A_ineq, b_ineq, A_eq, b_eq)
-#     # tableau_jax, basis_jax = _initialize_tableau(A_ineq, b_ineq, A_eq, b_eq)
-
-#     # # testing pivot col
-#     # found, pivcol = _pivot_col_qe(tableau, True)
-#     # found_jax, pivcol_jax = _pivot_col(tableau_jax, jnp.array(True))
-
-#     # # testing solve_tableau
-#     # tableau_jax, basis_jax, success_jax = solve_tableau(
-#     #     tableau_jax, basis_jax, jnp.array(False)
-#     # )
-#     # tableau, basis, success = solve_tableau_qe(
-#     #     tableau, basis, False
-#     # )
-
-#     # # testing set_criterion_row
-#     # tableau_jax = jit(_set_criterion_row)(jnp.array(c), basis_jax, tableau_jax)
-#     # tableau = _set_criterion_row_qe(c, basis, tableau)
-
-#     # # testing get_solution
-#     # b = np.concatenate((b_ineq, b_eq))
-#     # b_signs = b >= 0
-#     # x_opt, lambda_opt, opt_val = get_solution_qe(tableau, basis, b_signs, c)
-#     # x_opt_jax, lambda_opt_jax, opt_val_jax = jit(get_solution)(
-#     #     tableau_jax, basis_jax, jnp.array(b_signs), jnp.array(c)
-#     # )
+#     c = np.concatenate((c, -c), axis=-1)
 
 #     # testing linprog solve
 #     from quantecon.optimize import linprog_simplex
+#     from jax import jit
 #     res = linprog_simplex(c, A_ineq, b_ineq, A_eq, b_eq)
+#     compiled_linprog = jit(linprog)
 
-#     x_opt, lambda_opt, val_opt, success = jit(linprog)(c, A_ineq, b_ineq, A_eq, b_eq)
+#     x_opt, lambda_opt, val_opt, success = compiled_linprog(
+#         jnp.array(c),
+#         jnp.array(A_ineq),
+#         jnp.array(b_ineq),
+#         jnp.array(A_eq),
+#         jnp.array(b_eq),
+#     )
 
 #     print("COMPARING TO QUANTECON")
+#     print(f"QE status: {res.status}")
 #     if res.status == 0 and success:
 #         print(res.x - x_opt)
 #         print(res.lambd - lambda_opt)
@@ -536,6 +386,7 @@ def get_solution(
 #     )
 
 #     print("COMPARING TO SCIPY")
+#     print(f"scipy status: {res_scipy.status}")
 #     if res_scipy.success and success:
 #         print(res_scipy.x - x_opt)
 #         lambda_opt_scipy = -np.concatenate(
@@ -554,7 +405,7 @@ def get_solution(
 #     if k > 0:
 #         constraints += [A_eq @ x == b_eq]
 #     prob = cp.Problem(obj, constraints)
-#     prob.solve()
+#     prob.solve(solver=cp.GUROBI)
 
 #     print("COMPARING TO CVXPY")
 #     if prob.status == "optimal" and success:
@@ -565,5 +416,100 @@ def get_solution(
 #         print(_lambda_opt - lambda_opt)
 #         print(prob.value - val_opt)
 #     print()
+
+#     breakpoint()
+
+#     # TIMING #
+#     import time
+#     from jax import vmap
+#     B = 16
+#     m = 14
+#     n = 32
+#     k = 14
+#     A_ineq = np.random.rand(B, m, n)
+#     b_ineq = np.random.rand(B, m)
+#     A_eq = np.random.rand(B, k, n)
+#     b_eq = np.random.rand(B, k)
+#     c = np.random.rand(B, n)
+
+#     # transforming problem into canonical form
+#     n = 2 * n
+#     A_ineq = np.concatenate((A_ineq, -A_ineq), axis=-1)
+#     A_eq = np.concatenate((A_eq, -A_eq), axis=-1)
+#     c = np.concatenate((c, -c), axis=-1)
+
+#     # pre-compiling
+#     batch_linprog = jit(vmap(linprog))
+#     batch_linprog(
+#         jnp.array(c),
+#         jnp.array(A_ineq),
+#         jnp.array(b_ineq),
+#         jnp.array(A_eq),
+#         jnp.array(b_eq),
+#     )
+
+#     # # generating data one more time
+#     # B = 16
+#     # m = 14
+#     # n = 32
+#     # k = 14
+#     # A_ineq = np.random.rand(B, m, n)
+#     # b_ineq = np.random.rand(B, m)
+#     # A_eq = np.random.rand(B, k, n)
+#     # b_eq = np.random.rand(B, k)
+#     # c = np.random.rand(B, n)
+
+#     # # transforming problem into canonical form
+#     # n = 2 * n
+#     # A_ineq = np.concatenate((A_ineq, -A_ineq), axis=-1)
+#     # A_eq = np.concatenate((A_eq, -A_eq), axis=-1)
+#     # c = np.concatenate((c, -c), axis=-1)
+
+#     # serial
+#     start = time.time()
+#     for i in range(B):
+#         x_opt, lambda_opt, val_opt, success = compiled_linprog(
+#             jnp.array(c[i]),
+#             jnp.array(A_ineq[i]),
+#             jnp.array(b_ineq[i]),
+#             jnp.array(A_eq[i]),
+#             jnp.array(b_eq[i]),
+#         )
+#     end = time.time()
+#     print(f"Serial My Impl: {(end - start) / B}")
+
+#     start = time.time()
+#     qe_successes = 0
+#     for i in range(B):
+#         res = linprog_simplex(c[i], A_ineq[i], b_ineq[i], A_eq[i], b_eq[i])
+#         if res.success:
+#             qe_successes += 1
+#     end = time.time()
+#     print(f"Serial quantecon: {(end - start) / B}")
+
+#     start = time.time()
+#     for i in range(B):
+#         linprog_scipy(
+#             -c[i],
+#             A_ub=A_ineq[i],
+#             b_ub=b_ineq[i],
+#             A_eq=A_eq[i],
+#             b_eq=b_eq[i],
+#             method="highs-ds",
+#         )
+#     end = time.time()
+#     print(f"Serial scipy: {(end - start) / B}")
+
+#     # batched
+#     start = time.time()
+#     x_opt, lambda_opt, val_opt, success = batch_linprog(
+#         jnp.array(c),
+#         jnp.array(A_ineq),
+#         jnp.array(b_ineq),
+#         jnp.array(A_eq),
+#         jnp.array(b_eq),
+#     )
+#     end = time.time()
+#     print(f"Batched My Impl: {(end - start) / B}")
 
 #     breakpoint()
