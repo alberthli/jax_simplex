@@ -8,7 +8,7 @@ TOL_PIV = 1e-10
 TOL_RATIO_DIFF = 1e-15
 
 
-def _pivoting(tableau: jnp.ndarray, pc: jnp.ndarray, pr: jnp.ndarray) -> jnp.ndarray:
+def pivoting(tableau: jnp.ndarray, pc: jnp.ndarray, pr: jnp.ndarray) -> jnp.ndarray:
     """Perform a pivoting step and returns the new tableau with the replacement op.
 
     Parameters
@@ -35,7 +35,12 @@ def _pivoting(tableau: jnp.ndarray, pc: jnp.ndarray, pr: jnp.ndarray) -> jnp.nda
     return new_tableau
 
 
-def _min_ratio_test_no_tie_breaking(
+# ######################## #
+# MIN_RATIO_TEST + HELPERS #
+# ######################## #
+
+
+def min_ratio_test_no_tie_breaking(
     tableau: jnp.ndarray,
     pivot: jnp.ndarray,
     test_col: jnp.ndarray,
@@ -64,85 +69,58 @@ def _min_ratio_test_no_tie_breaking(
     argmins : jnp.ndarray[int], shape=(L + 1,)
         The modified indices of the minimum ratio.
     """
-
-    def _argmin_update_func(carry, argmins, pivot, test_col):
-        """Logic in single loop iteration."""
-        # unpacking carry state
-        k, ratio_min, num_argmins, argmins = carry
-
-        i = argmins[k]
-
-        def outer_branch1():
-            """Early stop if one of two conditions.
-
-            Conditions:
-            (1) tableau[i, pivot] <= TOL_PIV
-            (2) the total number of candidates has already been considered
-
-            Cond (2) is necessary because dynamically changing the number of loop iters
-            to run doesn't play nice with JIT, so we always run L+1 iters but tack on
-            dummy operations to pad the loop.
-            """
-            return (k + 1, ratio_min, num_argmins, argmins), argmins
-
-        def outer_branch2():
-            """If not early stopped, then do a 3-way case-switch base on ratio.
-
-            Cases:
-            (1) ratio > ratio_min + TOL_RATIO_DIFF, the curr ratio is larger than min
-                In this case, we just continue the loop.
-            (2) ratio < ratio_min - TOL_RATIO_DIFF, the curr ratio is lower than min
-                In this case, we have a new minimum, so we reset the argmin to the
-                current index and reset the argmin counter to 1.
-            (3) else, the curr ratio is same as min
-                In this case, we add 1 to the argmin counter and tack on this candidate
-                to the ordering of argmin indices.
-            """
-            ratio = tableau[i, test_col] / tableau[i, pivot]
-
-            conds = jnp.array(
-                [
-                    ratio > ratio_min + TOL_RATIO_DIFF,
-                    ratio < ratio_min - TOL_RATIO_DIFF,
-                    True,
-                ]
-            )
-
-            def inner_branch2():
-                new_argmins = argmins.at[0].set(i)
-                return (k + 1, ratio, 1, new_argmins), new_argmins
-
-            def inner_branch3():
-                new_argmins = argmins.at[num_argmins].set(i)
-                return (k + 1, ratio_min, num_argmins + 1, new_argmins), new_argmins
-
-            branches = [
-                lambda: ((k + 1, ratio_min, num_argmins, argmins), argmins),
-                inner_branch2,
-                inner_branch3,
-            ]
-            return lax.switch(jnp.argmax(conds), branches)
-
-        return lax.cond(
-            jnp.logical_or(tableau[i, pivot] <= TOL_PIV, k >= num_candidates),
-            outer_branch1,
-            outer_branch2,
-        )
-
-    # the static values are the pivot and the test column
-    argmin_update_func = partial(_argmin_update_func, pivot=pivot, test_col=test_col)
-
-    # unroll the min ratio test loop
-    carry_init = (0, jnp.inf, 0, argmins)
-    carry_final, all_argmins = lax.scan(
-        argmin_update_func, init=carry_init, xs=jnp.arange(tableau.shape[0])
+    # initializing cond and body functions for min ratio test loop
+    mrt_cond_fun = partial(_mrt_cond_fun, num_candidates=num_candidates)
+    mrt_body_fun = partial(
+        _mrt_body_fun,
+        pivot=pivot,
+        test_col=test_col,
+        tableau=tableau,
+        num_candidates=num_candidates,
     )
-    num_argmins = carry_final[2]
-    argmins = all_argmins[-1, :]  # scan returns all outputs of the loop, take last
+
+    # `val` = (k, ratio_min, num_argmins, argmins)
+    init_val = 0, jnp.inf, 0, argmins
+    num_argmins, argmins = lax.while_loop(mrt_cond_fun, mrt_body_fun, init_val)[-2:]
     return num_argmins, argmins
 
 
-def _lex_min_ratio_test(
+def _mrt_cond_fun(val, num_candidates):
+    """MRT helper function. Condition function of while loop."""
+    k = val[0]
+    return k < num_candidates
+
+
+def _mrt_body_fun(val, pivot, test_col, tableau, num_candidates):
+    """MRT helper function. Body function of while loop."""
+    k, ratio_min, num_argmins, argmins = val
+    i = argmins[k]
+    ratio = tableau[i, test_col] / tableau[i, pivot]
+
+    # three cases:
+    # (1) non-positive element OR ratio larger than min -> continue loop
+    # (2) ratio less than min -> reassign argmin, reset num_argmins to 1
+    # (3) else (ratio equal) -> increment num_argmins, add duplicate argmin to order
+    case1 = jnp.logical_or(
+        tableau[i, pivot] <= TOL_PIV, ratio > ratio_min + TOL_RATIO_DIFF
+    )
+    case2 = ratio < ratio_min - TOL_RATIO_DIFF
+    case3 = True
+    cases = jnp.array([case1, case2, case3])
+    branches = [
+        lambda: (k + 1, ratio_min, num_argmins, argmins),
+        lambda: (k + 1, ratio, 1, argmins.at[0].set(i)),
+        lambda: (k + 1, ratio_min, num_argmins + 1, argmins.at[num_argmins].set(i)),
+    ]
+    return lax.switch(jnp.argmax(cases), branches)
+
+
+# ####################### #
+# LEX_MIN_RATIO + HELPERS #
+# ####################### #
+
+
+def lex_min_ratio_test(
     tableau: jnp.ndarray,
     pivot: jnp.ndarray,
     slack_start: jnp.ndarray,
@@ -161,62 +139,51 @@ def _lex_min_ratio_test(
     Returns
     -------
     found : jnp.ndarray[bool], shape=(,)
-        Whether there was a positive entry in the pivot column.
+        Whether there was a positive entry in the piv column. True iff num_argmins==1.
     row_min : jnp.ndarray[int], shape=(,)
         Index of the row with the lexico-minimum ratio.
     """
     nrows = tableau.shape[0]
     num_candidates = jnp.array(nrows)
 
+    # initial while loop value
+    # `val` = (j, num_argmins, argmins)
     argmins = jnp.arange(nrows)
-    num_argmins, argmins = _min_ratio_test_no_tie_breaking(
+    num_argmins, argmins = min_ratio_test_no_tie_breaking(
         tableau, pivot, jnp.array(-1), argmins, num_candidates
     )
+    init_val = slack_start, num_argmins, argmins
 
-    def argmin_update_func(carry, argmins):
-        # unpacking loop state
-        j, num_argmins, argmins, _ = carry
+    # executing while loop
+    lex_mrt_cond_fun = partial(_lex_mrt_cond_fun, slack_start=slack_start, nrows=nrows)
+    lex_mrt_body_fun = partial(
+        _lex_mrt_body_fun,
+        tableau=tableau,
+        pivot=pivot,
+        num_candidates=num_candidates,
+    )
+    _, num_argmins, argmins = lax.while_loop(
+        lex_mrt_cond_fun,
+        lex_mrt_body_fun,
+        init_val,
+    )
+    return num_argmins == 1, argmins[0]
 
-        def branches_inner3(argmins):
-            num_argmins_inner, argmins_inner = _min_ratio_test_no_tie_breaking(
-                tableau, pivot, j, argmins, num_argmins
-            )
-            carry_inner = (j + 1, num_argmins_inner, argmins_inner, False)
-            return carry_inner, argmins_inner
 
-        conds_inner = jnp.array(
-            [
-                j == pivot,  # skip the pivot
-                num_argmins == 1,  # terminate the loop by only using dummy ops
-                True,  # else, run min ratio test w/o tiebreaks
-            ]
-        )
-        branches_inner = [
-            lambda argmins: ((j + 1, num_argmins, argmins, False), argmins),
-            lambda argmins: ((j + 1, num_argmins, argmins, True), argmins),
-            lambda argmins: branches_inner3(argmins),
-        ]
-        return lax.switch(jnp.argmax(conds_inner), branches_inner, argmins)
+def _lex_mrt_cond_fun(val, slack_start, nrows):
+    """Helper function for `lex_min_ratio_test`. Cond function of while loop."""
+    # Continue looping until num_argmins == 1 or until n_rows iterations have passed.
+    j, num_argmins, _ = val
+    return jnp.logical_and(num_argmins != 1, j < slack_start + nrows)
 
-    # inner branching logic
-    def inner_func(argmins):
-        """Runs when num_argmins >= 2.
 
-        Runs the lexicographic min ratio test until there's a unique choice.
-        """
-        # execute the lexicographic min ratio test loop
-        xs = jnp.arange(nrows)
-        carry_init = (slack_start, num_argmins, argmins, False)
-        carry_final, all_argmins = lax.scan(argmin_update_func, init=carry_init, xs=xs)
-        found = carry_final[3]
-        argmins = all_argmins[-1, :]
-        return found, argmins[0]
-
-    # outer branching logic
-    conds_outer = jnp.array([num_argmins == 1, num_argmins >= 2, True])
-    branches_outer = [
-        lambda argmins: (True, argmins[0]),
-        lambda argmins: inner_func(argmins),
-        lambda argmins: (False, argmins[0]),
-    ]
-    return lax.switch(jnp.argmax(conds_outer), branches_outer, argmins)
+def _lex_mrt_body_fun(val, tableau, pivot, num_candidates):
+    """Helper function for `lex_min_ratio_test`. Body function of while loop."""
+    # If j == pivot, continue the loop. Otherwise, compute a new argmin.
+    j, num_argmins, argmins = val
+    return lax.cond(
+        j == pivot,
+        lambda: (j + 1, num_argmins, argmins),
+        lambda: (j + 1,)
+        + min_ratio_test_no_tie_breaking(tableau, pivot, j, argmins, num_candidates),
+    )

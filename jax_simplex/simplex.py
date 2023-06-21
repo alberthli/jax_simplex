@@ -1,13 +1,9 @@
 import jax.numpy as jnp
 from jax import lax
 
-from jax_simplex.pivoting import _lex_min_ratio_test, _pivoting
+from jax_simplex.pivoting import lex_min_ratio_test, pivoting
 
 """
-TODOs
------
-- move all lambdas in lax.cond calls outside?
-
 Implementation ported into Jax from the QuantEcon package:
 https://github.com/QuantEcon/QuantEcon.py
 
@@ -28,6 +24,10 @@ L := m + k (number of basis variables)
 
 FEAS_TOL = 1e-6
 MAX_ITER = int(1e3)
+
+# ################# #
+# LINPROG + HELPERS #
+# ################# #
 
 
 def linprog(
@@ -72,7 +72,7 @@ def linprog(
     L = m + k
 
     # initialize tableau and execute phase 1
-    tableau, basis = _initialize_tableau(A_ineq, b_ineq, A_eq, b_eq)
+    tableau, basis = initialize_tableau(A_ineq, b_ineq, A_eq, b_eq)
     tableau, basis, success = solve_tableau(tableau, basis, jnp.array(False))
 
     # check whether phase 1 terminates, otherwise execute phase 2
@@ -86,7 +86,7 @@ def linprog(
 def _phase2_func(tableau, basis, c, b_ineq, b_eq):
     """Helper function to execute phase 2."""
     # modify criterion row and execute phase 2
-    tableau = _set_criterion_row(c, basis, tableau)
+    tableau = set_criterion_row(c, basis, tableau)
     tableau, basis, success = solve_tableau(tableau, basis, jnp.array(True))
 
     # retrieving solution
@@ -96,7 +96,12 @@ def _phase2_func(tableau, basis, c, b_ineq, b_eq):
     return x_opt, lambda_opt, val_opt, success
 
 
-def _initialize_tableau(
+# ######################### #
+# FUNCTIONS WITHOUT HELPERS #
+# ######################### #
+
+
+def initialize_tableau(
     A_ineq: jnp.ndarray,
     b_ineq: jnp.ndarray,
     A_eq: jnp.ndarray,
@@ -160,98 +165,7 @@ def _initialize_tableau(
     return tableau, basis
 
 
-def _pivot_col(
-    tableau: jnp.ndarray, skip_aux: jnp.ndarray
-) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Chooses the column containing the pivot element.
-
-    Parameters
-    ----------
-    tableau : jnp.ndarray, shape=(L + 1, m + n + L + 1)
-        The tableau.
-    skip_aux : jnp.ndarray[bool], shape=(,)
-        Whether to skip the coefficients of the aux variables in pivot col selection.
-
-    Returns
-    -------
-    found : jnp.ndarray[bool], shape=(,)
-        True iff there is a positive element in the last row of the tableau.
-    pivcol : jnp.ndarray[int], shape=(,)
-        The index of column containing the pivot element. -1 if not found.
-    """
-    L = tableau.shape[0] - 1
-    criterion_row_stop = tableau.shape[1] - 1
-    _tableau = tableau.at[-1, criterion_row_stop - L : criterion_row_stop].set(
-        tableau[-1, criterion_row_stop - L : criterion_row_stop] * (1 - skip_aux)
-    )  # removing auxiliary variables from consideration
-
-    return lax.cond(
-        jnp.sum(_tableau[-1, :criterion_row_stop] > FEAS_TOL) > 0,
-        lambda: (jnp.array(True), jnp.argmax(_tableau[-1, :criterion_row_stop])),
-        lambda: (jnp.array(False), jnp.array(-1, dtype=int)),
-    )
-
-
-def solve_tableau(
-    tableau: jnp.ndarray, basis: jnp.ndarray, skip_aux: jnp.ndarray
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Performs the simplex algorithm on a given tableau.
-
-    Parameters
-    ----------
-    tableau : jnp.ndarray, shape=(L + 1, n + m + L + 1)
-        The initial tableau.
-    basis : jnp.ndarray[int], shape=(L,)
-        Indices of the basic variables.
-    skip_aux : jnp.ndarray[bool], shape=(,)
-        Whether to skip the coefficients of the aux variables in pivot col selection.
-
-    Returns
-    -------
-    new_tableau : jnp.ndarray, shape=(L + 1, n + m + L + 1)
-        The new tableau.
-    new_basis : jnp.ndarray, shape=(L,)
-        Indices of the updated basic variables.
-    success : jnp.ndarray[bool], shape=(,)
-        Whether the algorithm succeeded in finding an optimal solution.
-    """
-    # value = (index, tableau, basis, success, terminate)
-    init_val = 0, tableau, basis, jnp.array(False), jnp.array(False)
-
-    def cond_fun(val):
-        i, _, _, _, terminate = val
-        return jnp.logical_and(i < MAX_ITER, ~terminate)
-
-    def body_fun(val):
-        """Helper function for performing the min ratio test."""
-        i, _tableau, _basis, _, _ = val
-
-        L = _tableau.shape[0] - 1
-        aux_start = _tableau.shape[1] - L - 1
-
-        pivcol_found, pivcol = _pivot_col(_tableau, skip_aux)
-        pivrow_found, pivrow = _lex_min_ratio_test(_tableau[:-1, :], pivcol, aux_start)
-
-        cases = jnp.array([~pivcol_found, ~pivrow_found, True])
-        branches = [
-            lambda: (i + 1, _tableau, _basis, jnp.array(True), jnp.array(True)),
-            lambda: (i + 1, _tableau, _basis, jnp.array(False), jnp.array(True)),
-            lambda: (
-                i + 1,
-                _pivoting(_tableau, pivcol, pivrow),
-                _basis.at[pivrow].set(pivcol),
-                jnp.array(False),
-                jnp.array(False),
-            ),
-        ]
-        new_val = lax.switch(jnp.argmax(cases), branches)
-        return new_val
-
-    _, tableau, basis, success, _ = lax.while_loop(cond_fun, body_fun, init_val)
-    return tableau, basis, success
-
-
-def _set_criterion_row(
+def set_criterion_row(
     c: jnp.ndarray, basis: jnp.ndarray, tableau: jnp.ndarray
 ) -> jnp.ndarray:
     """
@@ -337,6 +251,127 @@ def get_solution(
     val_opt = -tableau[-1, -1]
 
     return x_opt, lambda_opt, val_opt
+
+
+# ################### #
+# PIVOT_COL + HELPERS #
+# ################### #
+
+
+def pivot_col(
+    tableau: jnp.ndarray, skip_aux: jnp.ndarray
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Chooses the column containing the pivot element.
+
+    Parameters
+    ----------
+    tableau : jnp.ndarray, shape=(L + 1, m + n + L + 1)
+        The tableau.
+    skip_aux : jnp.ndarray[bool], shape=(,)
+        Whether to skip the coefficients of the aux variables in pivot col selection.
+
+    Returns
+    -------
+    found : jnp.ndarray[bool], shape=(,)
+        True iff there is a positive element in the last row of the tableau.
+    pivcol : jnp.ndarray[int], shape=(,)
+        The index of column containing the pivot element. -1 if not found.
+    """
+    L = tableau.shape[0] - 1
+    criterion_row_stop = tableau.shape[1] - 1
+    _tableau = tableau.at[-1, criterion_row_stop - L : criterion_row_stop].set(
+        tableau[-1, criterion_row_stop - L : criterion_row_stop] * (1 - skip_aux)
+    )  # removing auxiliary variables from consideration
+
+    return lax.cond(
+        jnp.sum(_tableau[-1, :criterion_row_stop] > FEAS_TOL) > 0,
+        _pivot_col_true_fun,
+        _pivot_col_false_fun,
+        _tableau,
+    )
+
+
+def _pivot_col_true_fun(tableau):
+    """Helper function for `pivot_col`. True outcome of conditional."""
+    criterion_row_stop = tableau.shape[1] - 1
+    return jnp.array(True), jnp.argmax(tableau[-1, :criterion_row_stop])
+
+
+def _pivot_col_false_fun(tableau):
+    """Helper function for `pivot_col`. False outcome of conditional."""
+    return jnp.array(False), jnp.array(-1, dtype=int)
+
+
+# ####################### #
+# SOLVE_TABLEAU + HELPERS #
+# ####################### #
+
+
+def solve_tableau(
+    tableau: jnp.ndarray, basis: jnp.ndarray, skip_aux: jnp.ndarray
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Performs the simplex algorithm on a given tableau.
+
+    Parameters
+    ----------
+    tableau : jnp.ndarray, shape=(L + 1, n + m + L + 1)
+        The initial tableau.
+    basis : jnp.ndarray[int], shape=(L,)
+        Indices of the basic variables.
+    skip_aux : jnp.ndarray[bool], shape=(,)
+        Whether to skip the coefficients of the aux variables in pivot col selection.
+
+    Returns
+    -------
+    new_tableau : jnp.ndarray, shape=(L + 1, n + m + L + 1)
+        The new tableau.
+    new_basis : jnp.ndarray, shape=(L,)
+        Indices of the updated basic variables.
+    success : jnp.ndarray[bool], shape=(,)
+        Whether the algorithm succeeded in finding an optimal solution.
+    """
+    # `val` = (index, tableau, basis, skip_aux, success, terminate)
+    init_val = 0, tableau, basis, skip_aux, jnp.array(False), jnp.array(False)
+
+    _, tableau, basis, _, success, _, = lax.while_loop(
+        _solve_tableau_cond_fun,
+        _solve_tableau_body_fun,
+        init_val,
+    )
+    return tableau, basis, success
+
+
+def _solve_tableau_cond_fun(val):
+    """Helper function for `solve_tableau`. Condition function for while loop."""
+    i, _, _, _, _, terminate = val
+    return jnp.logical_and(i < MAX_ITER, ~terminate)
+
+
+def _solve_tableau_body_fun(val):
+    """Helper function for `solve_tableau`. Body function for while loop."""
+    i, _tableau, _basis, skip_aux, _, _ = val
+
+    L = _tableau.shape[0] - 1
+    aux_start = _tableau.shape[1] - L - 1
+
+    pivcol_found, pivcol = pivot_col(_tableau, skip_aux)
+    pivrow_found, pivrow = lex_min_ratio_test(_tableau[:-1, :], pivcol, aux_start)
+
+    cases = jnp.array([~pivcol_found, ~pivrow_found, True])
+    branches = [
+        lambda: (i + 1, _tableau, _basis, skip_aux, jnp.array(True), jnp.array(True)),
+        lambda: (i + 1, _tableau, _basis, skip_aux, jnp.array(False), jnp.array(True)),
+        lambda: (
+            i + 1,
+            pivoting(_tableau, pivcol, pivrow),
+            _basis.at[pivrow].set(pivcol),
+            skip_aux,
+            jnp.array(False),
+            jnp.array(False),
+        ),
+    ]
+    new_val = lax.switch(jnp.argmax(cases), branches)
+    return new_val
 
 
 # if __name__ == "__main__":
