@@ -175,6 +175,7 @@ def lex_min_ratio_test(
     # initial while loop value
     # `val` = (j, num_argmins, argmins)
     argmins = jnp.arange(nrows)
+
     num_argmins, argmins = min_ratio_test_no_tie_breaking(
         tableau, pivot, jnp.array(-1), argmins, num_candidates
     )
@@ -186,7 +187,6 @@ def lex_min_ratio_test(
         _lex_mrt_body_fun,
         tableau=tableau,
         pivot=pivot,
-        num_candidates=num_candidates,
     )
     _, num_argmins, argmins = lax.while_loop(
         lex_mrt_cond_fun,
@@ -203,7 +203,7 @@ def _lex_mrt_cond_fun(val, slack_start, nrows):
     return jnp.logical_and(num_argmins != 1, j < slack_start + nrows)
 
 
-def _lex_mrt_body_fun(val, tableau, pivot, num_candidates):
+def _lex_mrt_body_fun(val, tableau, pivot):
     """Helper function for `lex_min_ratio_test`. Body function of while loop."""
     # If j == pivot, continue the loop. Otherwise, compute a new argmin.
     j, num_argmins, argmins = val
@@ -211,5 +211,5 @@ def _lex_mrt_body_fun(val, tableau, pivot, num_candidates):
         j == pivot,
         lambda: (j + 1, num_argmins, argmins),
         lambda: (j + 1,)
-        + min_ratio_test_no_tie_breaking(tableau, pivot, j, argmins, num_candidates),
+        + min_ratio_test_no_tie_breaking(tableau, pivot, j, argmins, num_argmins),
     )
