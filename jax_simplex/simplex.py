@@ -1,6 +1,7 @@
 import jax.numpy as jnp
-from core.pivoting import lex_min_ratio_test, pivoting
 from jax import lax
+
+from jax_simplex.pivoting import lex_min_ratio_test, pivoting
 
 """
 Implementation ported into Jax from the QuantEcon package:
