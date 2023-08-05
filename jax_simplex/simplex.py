@@ -21,6 +21,7 @@ A_eq, shape=(..., k, n)
 L := m + k (number of basis variables)
 """
 
+PIV_TOL = 1e-7
 FEAS_TOL = 1e-6
 MAX_ITER = int(1e6)
 
@@ -73,7 +74,7 @@ def linprog(
 
     # check whether phase 1 terminates, otherwise execute phase 2
     return lax.cond(
-        jnp.logical_or(~success, tableau[-1, -1] > FEAS_TOL),
+        jnp.logical_or(jnp.logical_not(success), tableau[-1, -1] > FEAS_TOL),
         _linprog_true_fun,
         _phase2_func,
         tableau,
@@ -307,7 +308,7 @@ def _pivot_col_body_fun(i, val):
     """Helper function for `pivot_col`. Looping body."""
     found, pivcol, coeff, tableau = val
     new_val = lax.cond(
-        tableau[-1, i] > coeff,
+        tableau[-1, i] - coeff >= PIV_TOL,  # [NOTE] different from quantecon!
         lambda: (True, i, tableau[-1, i], tableau),
         lambda: (found, pivcol, coeff, tableau),
     )

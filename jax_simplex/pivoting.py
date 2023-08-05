@@ -4,8 +4,8 @@ import jax.numpy as jnp
 from jax import config, lax
 
 config.update("jax_enable_x64", True)
-TOL_PIV = 1e-10
-TOL_RATIO_DIFF = 1e-15
+TOL_PIV = 1e-7
+TOL_RATIO_DIFF = 1e-13
 
 
 def pivoting(tableau: jnp.ndarray, pc: jnp.ndarray, pr: jnp.ndarray) -> jnp.ndarray:
