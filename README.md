@@ -3,8 +3,9 @@ This repo contains an implementation of the simplex method for solving linear pr
 
 To install, clone the repository (`conda` environment recommended) and in the repository root run
 ```
-pip install -r requirements.txt
-pip install -e .
+pip install -e . \
+    --find-links https://storage.googleapis.com/jax-releases/jax_releases.html \
+    --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
 By default, the requirements file installs `jax` assuming your system has Cuda 11. To install for Cuda 12, simply uncomment the correct dependencies before running the above command.
 

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jax_simplex"
+version = "0.0.1"
+description = "Simplex method for solving linear programs with JAX"
+readme = "README.md"
+license = { text="Apache 2.0"}
+requires-python = "==3.10.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python",
+]
+dependencies = [
+    "jax>=0.4.14",
+    # "jaxlib==0.4.14+cuda12.cudnn89",
+    "jaxlib==0.4.14+cuda11.cudnn86",
+    # "jaxlib>=0.4.14",
+    "numpy>=1.25.2",
+    # "nvidia-cudnn-cu12>=8.9.1.23",
+    "nvidia-cudnn-cu11==8.9.2.26",
+    "scipy>=1.11.1",
+]
+
+[project.optional-dependencies]
+# Development packages
+dev = [
+    "cvxpy[GUROBI]>=1.3.1",
+    "matplotlib>=3.7.2",
+    "pre-commit>=3.3.3",
+]
+
+[options]
+pythonVersion = "3.10"
+pythonPlatform = "Linux"
