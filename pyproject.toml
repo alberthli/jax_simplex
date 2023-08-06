@@ -14,10 +14,10 @@ classifiers = [
     "Programming Language :: Python",
 ]
 dependencies = [
-    "jax>=0.4.14",
-    # "jaxlib==0.4.14+cuda12.cudnn89",
-    "jaxlib==0.4.14+cuda11.cudnn86",
-    # "jaxlib>=0.4.14",
+    "jax>=0.4.10",
+    # "jaxlib==0.4.10+cuda12.cudnn89",
+    "jaxlib==0.4.10+cuda11.cudnn86",
+    # "jaxlib>=0.4.10",
     "numpy>=1.25.2",
     # "nvidia-cudnn-cu12>=8.9.1.23",
     "nvidia-cudnn-cu11==8.9.2.26",
