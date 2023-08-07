@@ -7,7 +7,6 @@ pip install -e . \
     --find-links https://storage.googleapis.com/jax-releases/jax_releases.html \
     --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
-By default, the requirements file installs `jax` assuming your system has Cuda 11. To install for Cuda 12, simply uncomment the correct dependencies before running the above command.
 
 ## Example Usage
 ```
