@@ -20,7 +20,7 @@ dependencies = [
     "numpy>=1.22",
     # "nvidia-cudnn-cu12>=8.9.1.23",
     "nvidia-cudnn-cu11==8.9.2.26",
-    "scipy>=1.11.1",
+    "scipy>=1.10.1",
 ]
 
 [project.optional-dependencies]
