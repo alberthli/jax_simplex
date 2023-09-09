@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Tuple
 
 import jax.numpy as jnp
 from jax import config, lax
@@ -46,7 +47,7 @@ def min_ratio_test_no_tie_breaking(
     test_col: jnp.ndarray,
     argmins: jnp.ndarray,
     num_candidates: jnp.ndarray,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Performs the min ratio test without tie breaks.
 
     Parameters

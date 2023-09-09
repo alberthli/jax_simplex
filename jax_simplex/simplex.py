@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import jax.numpy as jnp
 from jax import lax
 
@@ -215,7 +217,7 @@ def get_solution(
     basis: jnp.ndarray,
     b_signs: jnp.ndarray,
     c: jnp.ndarray,
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Computes the optimal primal/dual solutions and values from the optimal tableau.
 
     Parameters
@@ -270,7 +272,7 @@ def get_solution(
 
 def pivot_col(
     tableau: jnp.ndarray, skip_aux: jnp.ndarray
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Chooses the column containing the pivot element.
 
     Parameters
@@ -323,7 +325,7 @@ def _pivot_col_body_fun(i, val):
 
 def solve_tableau(
     tableau: jnp.ndarray, basis: jnp.ndarray, skip_aux: jnp.ndarray
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Performs the simplex algorithm on a given tableau.
 
     Parameters
