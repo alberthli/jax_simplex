@@ -8,7 +8,7 @@ version = "0.0.1"
 description = "Simplex method for solving linear programs with JAX"
 readme = "README.md"
 license = { text="Apache 2.0"}
-requires-python = "==3.10.12"
+requires-python = ">=3.8"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python",
@@ -17,7 +17,7 @@ dependencies = [
     "jax>=0.4.10",
     "jaxlib>=0.4.10",
     # "jaxlib==0.4.10+cuda11.cudnn86",
-    "numpy>=1.22",
+    "numpy>=1.20",
     # "nvidia-cudnn-cu12>=8.9.1.23",
     "nvidia-cudnn-cu11==8.5.0.96",
     "scipy>=1.10.1",
@@ -30,7 +30,3 @@ dev = [
     "matplotlib>=3.7.2",
     "pre-commit>=3.3.3",
 ]
-
-[options]
-pythonVersion = "3.10"
-pythonPlatform = "Linux"
