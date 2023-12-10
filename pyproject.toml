@@ -19,7 +19,7 @@ dependencies = [
     # "jaxlib==0.4.10+cuda11.cudnn86",
     "numpy>=1.20",
     # "nvidia-cudnn-cu12>=8.9.1.23",
-    "nvidia-cudnn-cu11==8.5.0.96",
+    # "nvidia-cudnn-cu11==8.5.0.96",
     "scipy>=1.10.1",
 ]
 
